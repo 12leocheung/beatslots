@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ECHO RIFT</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#08000f;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:flex-start;
+  height:100vh; font-family:'Courier New',monospace;
+  overflow:hidden; user-select:none;
+}
+#hud {
+  width:1000px; display:flex;
+  justify-content:space-between; align-items:center;
+  padding:6px 14px; background:#0d0018;
+  border-bottom:1px solid #2a0044; flex-shrink:0;
+}
+#beat-bar { display:flex; gap:6px; align-items:center; }
+.beat-dot { width:13px; height:13px; border-radius:50%; background:#1a003a; border:1px solid #3a006a; }
+.beat-dot.active { background:#ff44ff; box-shadow:0 0 10px #ff44ff; }
+#bpm-label { color:#443366; font-size:11px; margin-left:6px; }
+#score-el  { color:#44ffdd; font-size:13px; }
+#title-el  { color:#ff44ff; font-size:15px; letter-spacing:4px; }
+#lives-el  { display:flex; gap:5px; align-items:center; }
+.life-heart { font-size:14px; transition:opacity 0.3s; }
+.life-heart.dead { opacity:0.18; filter:grayscale(1); }
+#canvas { display:block; }
+#inv-bar {
+  width:1000px; display:flex; gap:6px;
+  padding:6px 10px; background:#0d0018;
+  border-top:1px solid #2a0044;
+  flex-wrap:wrap; min-height:54px; align-items:center;
+}
+.echo-chip {
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  padding:4px 10px; border-radius:4px;
+  border:1px solid rgba(255,255,255,0.12);
+  cursor:pointer; min-width:95px;
+  position:relative; overflow:hidden; transition:filter 0.1s;
+}
+.echo-chip:hover { filter:brightness(1.4); }
+.chip-key  { font-size:9px; opacity:0.5; }
+.chip-name { font-size:11px; font-weight:bold; }
+.chip-sub  { font-size:9px; opacity:0.65; }
+.chip-bar  { position:absolute; bottom:0; left:0; height:2px; transition:width 0.08s; }
+#hint-el {
+  width:1000px; display:flex; gap:14px; flex-wrap:wrap;
+  padding:3px 12px; color:#2a1844; font-size:10px;
+}
+#flash-el {
+  position:fixed; top:40%; left:50%;
+  transform:translate(-50%,-50%);
+  font-size:24px; font-weight:bold;
+  pointer-events:none; opacity:0;
+  text-shadow:0 0 18px currentColor;
+  z-index:999; white-space:nowrap; transition:opacity 0.3s;
+}
+#puzzle-hint {
+  position:fixed; bottom:88px; left:50%;
+  transform:translateX(-50%);
+  background:#0d001899; border:1px solid #440066;
+  color:#cc88ff; font-size:12px; padding:6px 16px;
+  border-radius:4px; pointer-events:none; opacity:0;
+  transition:opacity 0.4s; white-space:nowrap; z-index:99;
+}
+#death-screen {
+  position:fixed; inset:0; pointer-events:none; z-index:900;
+  background:rgba(80,0,0,0); transition:background 0.3s;
+}
+#gameover-screen {
+  position:fixed; inset:0; background:rgba(0,0,0,0.9);
+  display:none; flex-direction:column;
+  align-items:center; justify-content:center;
+  z-index:1000; color:#ff2255; font-family:'Courier New',monospace;
+}
+#gameover-screen h1 { font-size:48px; letter-spacing:6px; text-shadow:0 0 30px #ff2255; }
+#gameover-screen p  { color:#aa6688; margin:12px 0 28px; font-size:14px; }
+#restart-btn {
+  padding:12px 32px; background:#1a0010;
+  border:2px solid #ff2255; color:#ff2255;
+  font-family:'Courier New',monospace; font-size:16px;
+  cursor:pointer; letter-spacing:2px; transition:background 0.2s;
+}
+#restart-btn:hover { background:#330020; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="beat-bar">
+    <div class="beat-dot" id="bd0"></div>
+    <div class="beat-dot" id="bd1"></div>
+    <div class="beat-dot" id="bd2"></div>
+    <div class="beat-dot" id="bd3"></div>
+    <span id="bpm-label">120 BPM</span>
+  </div>
+  <div id="title-el">ECHO RIFT</div>
+  <div id="lives-el">
+    <span class="life-heart" id="lh0">❤️</span>
+    <span class="life-heart" id="lh1">❤️</span>
+    <span class="life-heart" id="lh2">❤️</span>
+    <span class="life-heart" id="lh3">❤️</span>
+    <span class="life-heart" id="lh4">❤️</span>
+  </div>
+  <div id="score-el">SCORE: 0</div>
+</div>
+<canvas id="canvas" width="1000" height="460"></canvas>
+<div id="inv-bar"></div>
+<div id="hint-el">
+  <span>A/D or ← → MOVE</span>
+  <span>W / SPACE JUMP</span>
+  <span>1–9 PLACE pad on ground ahead</span>
+  <span>SHIFT+1–9 DISCARD</span>
+  <span>Walk into ♪ orbs to collect</span>
+</div>
+<div id="flash-el"></div>
+<div id="puzzle-hint"></div>
+<div id="death-screen"></div>
+<div id="gameover-screen">
+  <h1>GAME OVER</h1>
+  <p id="gameover-score">FINAL SCORE: 0</p>
+  <button id="restart-btn" onclick="restartGame()">▶ RESTART</button>
+</div>
+
+<script>
+'use strict';
+
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+const W = 1000, H = 460;
+
+// ═══════════════════════════════════════════
+// AUDIO
+// ═══════════════════════════════════════════
+let AC = null, masterVol = null;
+const BPM=120, BEAT_S=60/BPM, STEP_S=BEAT_S/2, STEPS=8;
+let songStart=0, schedNext=0, schedStep=0;
+const LOOKAHEAD=0.14;
+
+function initAudio(){
+  if(AC) return;
+  AC=new(window.AudioContext||window.webkitAudioContext)();
+  masterVol=AC.createGain(); masterVol.gain.value=0.6;
+  masterVol.connect(AC.destination);
+  songStart=AC.currentTime+0.2; schedNext=songStart; schedStep=0;
+  schedLoop();
+}
+function tone(freq,type,t,dur,vol=0.28,pan=0){
+  const o=AC.createOscillator(),g=AC.createGain(),p=AC.createStereoPanner();
+  o.type=type; o.frequency.value=freq;
+  g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g);g.connect(p);p.connect(masterVol);p.pan.value=pan;
+  o.start(t);o.stop(t+dur+0.02);
+}
+function nz(t,dur,vol=0.22,hp=2000){
+  const n=Math.ceil(AC.sampleRate*Math.max(dur,0.05));
+  const buf=AC.createBuffer(1,n,AC.sampleRate),d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=Math.random()*2-1;
+  const s=AC.createBufferSource(),f=AC.createBiquadFilter(),g=AC.createGain();
+  s.buffer=buf;f.type='highpass';f.frequency.value=hp;
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  s.connect(f);f.connect(g);g.connect(masterVol);s.start(t);s.stop(t+dur+0.02);
+}
+function kick(t){const o=AC.createOscillator(),g=AC.createGain();o.type='sine';o.frequency.setValueAtTime(160,t);o.frequency.exponentialRampToValueAtTime(38,t+0.18);g.gain.setValueAtTime(0.95,t);g.gain.exponentialRampToValueAtTime(0.0001,t+0.32);o.connect(g);g.connect(masterVol);o.start(t);o.stop(t+0.36);}
+function snare(t){nz(t,0.19,0.45,1800);tone(200,'triangle',t,0.12,0.22);}
+function hihat(t){nz(t,0.07,0.28,7500);}
+function ohat(t){nz(t,0.28,0.22,6000);}
+function bass(t,s){const f=[55,65.4,73.4,82.4,98,110];tone(f[s%f.length],'square',t,0.22,0.36);}
+function lead(t,s){const f=[523,587,659,698,784,880,988,1046];tone(f[s%f.length],'square',t,0.14,0.18);}
+function arp(t){[262,330,392,523].forEach((f,i)=>tone(f,'triangle',t+i*0.045,0.1,0.11));}
+function padSnd(t){[261,329,392].forEach(f=>tone(f,'sine',t,BEAT_S*1.9,0.07));}
+function blip(t,freq=800){tone(freq,'square',t,0.05,0.15);}
+function deathSnd(t){tone(220,'sawtooth',t,0.1,0.3);tone(180,'sawtooth',t+0.08,0.12,0.3);tone(140,'sawtooth',t+0.18,0.2,0.3);}
+function cpSnd(t){blip(t,880);blip(t+0.1,1100);blip(t+0.2,1320);}
+
+// ═══════════════════════════════════════════
+// ECHOES
+// ═══════════════════════════════════════════
+const ECHOES={
+  KICK:   {name:'🥁 KICK',    color:'#ff2255',dark:'#200010',sub:'BOUNCE pad',   pattern:[1,0,0,0,1,0,0,0],play:(t)=>kick(t),    platType:'bounce'  },
+  SNARE:  {name:'🔥 SNARE',   color:'#ff8800',dark:'#1f0a00',sub:'SPEED pad',    pattern:[0,0,0,0,1,0,0,0],play:(t)=>snare(t),   platType:'speed'   },
+  HIHAT:  {name:'🎵 HIHAT',   color:'#ffee22',dark:'#191600',sub:'ANTIGRAV pad', pattern:[1,0,1,0,1,0,1,0],play:(t)=>hihat(t),   platType:'antigrav'},
+  OPENHAT:{name:'🔔 OPEN HAT',color:'#ffbb44',dark:'#1a0f00',sub:'CRUMBLE pad',  pattern:[0,0,0,0,0,0,0,1],play:(t)=>ohat(t),    platType:'crumble' },
+  BASS:   {name:'🎸 BASS',    color:'#00ffcc',dark:'#00201a',sub:'STICKY pad',   pattern:[1,0,0,1,0,1,0,0],play:(t,s)=>bass(t,s),platType:'sticky'  },
+  LEAD:   {name:'🎹 LEAD',    color:'#aa44ff',dark:'#120028',sub:'PHASE pad',    pattern:[1,0,1,0,0,1,0,1],play:(t,s)=>lead(t,s),platType:'phase'   },
+  ARP:    {name:'✨ ARP',     color:'#44ddff',dark:'#001e26',sub:'WARP pad',     pattern:[1,1,0,1,1,0,1,1],play:(t)=>arp(t),     platType:'teleport'},
+  PAD:    {name:'🌊 PAD',     color:'#7766ff',dark:'#0a0820',sub:'ICE pad',      pattern:[1,0,0,0,0,0,0,0],play:(t)=>padSnd(t),  platType:'ice'     },
+};
+
+const PS={
+  ground:  {fill:'#111122',top:'#252540',glow:null},
+  normal:  {fill:'#1a1a33',top:'#334466',glow:null},
+  wall:    {fill:'#111122',top:'#111122',glow:null},
+  bounce:  {fill:'#300015',top:'#ff2255',glow:'#ff2255',label:'⬆ BOUNCE'  },
+  speed:   {fill:'#271000',top:'#ff8800',glow:'#ff8800',label:'⚡ SPEED'   },
+  antigrav:{fill:'#1a1800',top:'#ffee22',glow:'#ffee22',label:'🔄 ANTIGRAV'},
+  crumble: {fill:'#1e0a00',top:'#ff6633',glow:'#ff6633',label:'💥 CRUMBLE' },
+  sticky:  {fill:'#002218',top:'#00ffcc',glow:'#00ffcc',label:'🍯 STICKY'  },
+  phase:   {fill:'#0d0020',top:'#aa44ff',glow:'#aa44ff',label:'👻 PHASE'   },
+  teleport:{fill:'#001a20',top:'#44ddff',glow:'#44ddff',label:'🌀 WARP'    },
+  ice:     {fill:'#0a0820',top:'#7766ff',glow:'#7766ff',label:'❄ ICE'      },
+};
+
+// ═══════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════
+let score=0, lives=5, isDead=false, deathTimer=0, isGameOver=false;
+let heldEchos=[], activeKeys=new Set(), particles=[];
+let flashTimer=null, camX=0, currentBeat=0;
+let beatFlash=[0,0,0,0], bgBase=[8,0,15], bgTarget=[8,0,15], bgPulse=0;
+let frame=0, warpCooldown=0;
+
+// ── CHECKPOINT: track the last activated one ──
+// Stored as the world-space spawn position (top-left of player)
+let checkpointSpawn = {x:120, y:370};
+
+const WORLD_W=7000, GRAVITY=0.52, JUMP_V=-13, RUN_SPD=4.2, SNAP_WIN=0.25;
+const PAD_W = 90, PAD_H = 14;
+
+// ═══════════════════════════════════════════
+// PLAYER
+// ═══════════════════════════════════════════
+const P={
+  x:120, y:370, vx:0, vy:0, w:22, h:30,
+  onGround:false, ceilGround:false,
+  jumpQueued:false, jumpQueueT:0,
+  facingR:true, trail:[],
+  antigravT:0, iceT:0, stickyT:0,
+};
+
+// ═══════════════════════════════════════════
+// LEVEL DATA
+// ═══════════════════════════════════════════
+let staticPlats=[], soundOrbs=[], placedPlats=[], goalPads=[], signs=[], cpPads=[];
+
+function mkPlat(x,y,w,h=14,type='normal'){
+  return{x,y,w,h,type,alive:true,crumbleT:type==='crumble'?90:-1,phaseT:0,phaseOn:true,isPlaced:false};
+}
+function slab(x,y,w,h,t='normal'){staticPlats.push(mkPlat(x,y,w,h,t));}
+function orb(x,y,type){soundOrbs.push({x,y,type,pulse:Math.random()*Math.PI*2,collected:false,respawnT:0});}
+function sign(x,y,text,range=200){signs.push({x,y,text,range});}
+function goal(x,y,w,h,msg){goalPads.push({x,y,w,h,msg,triggered:false});}
+
+// Checkpoint: stores the exact world spawn position directly
+function cp(spawnX, spawnY){
+  // The visible flag sits at spawnX, spawnY
+  // When player overlaps it, checkpointSpawn = {x:spawnX, y:spawnY}
+  cpPads.push({
+    x: spawnX, y: spawnY,       // world position of flag base
+    w: 24, h: 40,
+    spawnX: spawnX,             // exact spawn coords stored here
+    spawnY: spawnY,
+    activated: false
+  });
+}
+
+function buildLevel(){
+  staticPlats=[];soundOrbs=[];goalPads=[];signs=[];cpPads=[];placedPlats=[];
+
+  // ── TUTORIAL  0–950 ──────────────────────────
+  slab(0,430,950,30,'ground');
+  slab(0,0,10,460,'wall');
+  slab(300,360,100,14);
+  slab(480,300,100,14);
+  slab(680,345,140,14);
+  sign(80,405,'A/D or ← → move  |  W/SPACE jump  |  Reach ★ GOAL →',280);
+  goal(870,405,70,14,'TUTORIAL CLEAR! +500');
+  cp(60, 390);
+
+  // ── PUZZLE 1: BOUNCE  1000–2050 ──────────────
+  slab(1000,430,220,30,'ground');
+  // chasm 1220–1780
+  slab(1780,430,270,30,'ground');
+  orb(1110,400,'KICK');
+  sign(1090,394,'🥁 Massive chasm! Place BOUNCE pad (press 1) — it launches you far enough to cross!',230);
+  goal(1940,400,70,14,'PUZZLE 1 — BOUNCE MASTER! +500');
+  cp(1010, 390);
+  cp(1790, 390);
+
+  // ── PUZZLE 2: ANTIGRAV  2200–3100 ────────────
+  slab(2200,430,240,30,'ground');
+  slab(2200,0,900,18,'ground');    // solid ceiling to walk on
+  slab(2390,18,110,14);
+  slab(2590,18,110,14);
+  slab(2790,18,110,14);
+  slab(2940,0,200,30,'ground');   // ceiling exit
+  slab(2490,300,14,130,'wall');   // floor blocked
+  orb(2290,400,'HIHAT');
+  sign(2270,394,'🔄 Floor is blocked! Place ANTIGRAV pad — gravity flips. Walk/jump along the CEILING to the exit!',230);
+  goal(3000,8,80,10,'PUZZLE 2 — GRAVITY FLIP! +500');
+  cp(2210, 390);
+  cp(2950, 8);
+
+  // ── PUZZLE 3: SPEED  3200–4100 ───────────────
+  slab(3200,430,900,30,'ground');
+  slab(3680,200,18,230,'wall');
+  orb(3310,400,'SNARE');
+  sign(3290,394,'⚡ Wall too tall to jump normally! Place SPEED pad then immediately jump — the boost clears it!',220);
+  goal(4000,400,70,14,'PUZZLE 3 — SPEED RUNNER! +500');
+  cp(3210, 390);
+  cp(3710, 390);
+
+  // ── PUZZLE 4: ICE + SPEED  4200–5100 ─────────
+  slab(4200,430,900,30,'ground');
+  slab(4310,372,370,14);
+  slab(4310,372,14,72,'wall');
+  slab(4680,372,14,72,'wall');
+  slab(4740,430,160,10,'sticky');
+  orb(4220,400,'PAD');
+  orb(4730,400,'SNARE');
+  sign(4230,394,'❄ Low corridor — place ICE to slide through. Sticky trap after — place SPEED to escape!',230);
+  goal(5020,400,70,14,'PUZZLE 4 — SLIDE & ESCAPE! +500');
+  cp(4210, 390);
+  cp(4760, 390);
+
+  // ── PUZZLE 5: PHASE + CRUMBLE  5200–6100 ─────
+  slab(5200,430,200,30,'ground');
+  slab(5460,280,14,150,'wall');
+  slab(5360,266,105,14,'crumble');
+  slab(5580,266,105,14,'crumble');
+  slab(5800,430,300,30,'ground');
+  orb(5280,400,'OPENHAT');
+  orb(5350,400,'LEAD');
+  sign(5260,394,'💥 CRUMBLE breaks walls/platforms on touch. 👻 PHASE flickers — place it as a safe crossing!',240);
+  goal(5990,400,70,14,'PUZZLE 5 — PHASE MASTER! +500');
+  cp(5210, 390);
+  cp(5810, 390);
+
+  // ── PUZZLE 6: WARP x2  6200–7000 ─────────────
+  slab(6200,430,180,30,'ground');
+  slab(6490,360,130,14);
+  slab(6750,430,180,30,'ground');
+  slab(7010,390,150,14);  // was 6940
+  orb(6260,400,'ARP');
+  orb(6800,400,'ARP');
+  sign(6260,394,'🌀 Place WARP pad here, cross to far island, place second WARP — step on either to teleport!',230);
+  goal(7020,360,100,14,'🎉 YOU WIN! WARP MASTER +1000');
+  cp(6210, 390);
+  cp(6760, 390);
+
+  slab(7160,0,10,460,'wall');
+}
+
+buildLevel();
+
+// ═══════════════════════════════════════════
+// INPUT — WASD + Arrow keys both work
+// ═══════════════════════════════════════════
+const keys={};
+function isLeft()  { return keys['ArrowLeft']  || keys['KeyA']; }
+function isRight() { return keys['ArrowRight'] || keys['KeyD']; }
+function isJump()  { return keys['Space']       || keys['KeyW']; }
+
+window.addEventListener('keydown',e=>{
+  if(keys[e.code]) return;
+  keys[e.code]=true;
+  if(!AC) initAudio(); else if(AC.state==='suspended') AC.resume();
+  if(e.code==='Space'||e.code==='KeyW'){
+    e.preventDefault();
+    P.jumpQueued=true; P.jumpQueueT=AC?AC.currentTime:0;
+  }
+  if(e.code.startsWith('Digit')){
+    if(isGameOver||isDead) return;
+    const n=parseInt(e.key)-1;
+    if(n>=0&&n<heldEchos.length) e.shiftKey?discardSlot(n):placeSlot(n);
+  }
+});
+window.addEventListener('keyup',e=>{ keys[e.code]=false; });
+canvas.addEventListener('click',()=>{ if(!AC)initAudio(); else if(AC.state==='suspended')AC.resume(); });
+
+// ═══════════════════════════════════════════
+// SEQUENCER
+// ═══════════════════════════════════════════
+function schedLoop(){
+  if(!AC) return;
+  while(schedNext<AC.currentTime+LOOKAHEAD){
+    const step=schedStep%STEPS, beat=Math.floor(step/2);
+    blip(schedNext,beat===0?1100:700);
+    activeKeys.forEach(k=>{const e=ECHOES[k];if(e&&e.pattern[step])e.play(schedNext,step);});
+    const cb=beat,ct=schedNext;
+    setTimeout(()=>{
+      currentBeat=cb;beatFlash[cb%4]=1;bgPulse=Math.max(bgPulse,0.55);
+      updateBeatDots(cb%4);
+    },Math.max(0,(ct-AC.currentTime)*1000));
+    schedNext+=STEP_S; schedStep++;
+  }
+  setTimeout(schedLoop,38);
+}
+function updateBeatDots(b){
+  for(let i=0;i<4;i++){const d=document.getElementById('bd'+i);if(d)d.className='beat-dot'+(i===b?' active':'');}
+}
+
+// ═══════════════════════════════════════════
+// PICKUP
+// ═══════════════════════════════════════════
+function pickupOrb(o){
+  o.collected=true; o.respawnT=1800;
+  heldEchos.push(o.type); activeKeys.add(o.type);
+  score+=150;
+  flash('GOT '+ECHOES[o.type].name+'!',ECHOES[o.type].color);
+  spawnParts(o.x-camX,o.y,ECHOES[o.type].color,22);
+  shiftBg(o.type);
+  if(!AC) initAudio();
+  updateInvUI();
+}
+
+// ═══════════════════════════════════════════
+// PLACE PAD
+// FIX: place on ground SURFACE in front of player, not inside floor
+// ═══════════════════════════════════════════
+function placeSlot(i){
+  if(i>=heldEchos.length) return;
+  const key=heldEchos[i], echo=ECHOES[key];
+  const pw=PAD_W;
+
+  let px, py;
+
+  if(P.antigravT>0){
+    // Antigrav: place pad ON THE CEILING (above player's head)
+    px = P.x + P.w/2 - pw/2;
+    py = P.y - PAD_H;  // pad sits above player's head, player's head touches underside
+  } else {
+    // Normal: place pad ON THE GROUND just in front of player
+    // Find the ground surface y at the player's feet
+    const dir = P.facingR ? 1 : -1;
+    px = P.x + dir * (P.w/2 + 4);   // just beside player centre
+    px = P.x + P.w/2 - pw/2;        // actually centre it under feet
+
+    // Pad top surface = exactly at player's feet level
+    py = P.y + P.h;
+
+    // Don't go below the lowest ground slab
+    py = Math.min(py, H - 30 - PAD_H);
+  }
+
+  const pl = mkPlat(px, py, pw, PAD_H, echo.platType);
+  pl.isPlaced = true;
+  placedPlats.push(pl);
+
+  // Snap player onto pad surface
+  if(P.antigravT>0){
+    // Player head now pressed against underside of ceiling pad
+    P.y = py + PAD_H;
+    P.ceilGround = true;
+  } else {
+    // Player feet now standing on top of pad
+    P.y = py - P.h;
+    P.onGround = true;
+  }
+  P.vy = 0;
+
+  spawnParts(px-camX+pw/2, py, echo.color, 22);
+  flash('PLACED: '+echo.sub.toUpperCase(), echo.color);
+  score += 60;
+  activeKeys.delete(key);
+  heldEchos.splice(i,1);
+  shiftBg(key);
+  updateInvUI();
+  onLand(pl);
+}
+
+function discardSlot(i){
+  if(i>=heldEchos.length) return;
+  activeKeys.delete(heldEchos[i]);
+  heldEchos.splice(i,1);
+  updateInvUI();
+  flash('DISCARDED','#666688');
+}
+
+// ═══════════════════════════════════════════
+// LANDING EFFECTS
+// ═══════════════════════════════════════════
+function onLand(plat){
+  switch(plat.type){
+    case 'bounce':
+      P.vy=-22; P.vx+=(P.facingR?5:-5); P.onGround=false;
+      spawnParts(P.x-camX+P.w/2,P.y+P.h,'#ff2255',18);
+      flash('BOUNCE!','#ff2255');
+      if(AC)blip(AC.currentTime,880);
+      break;
+    case 'speed':
+      P.vx+=(P.facingR?9:-9);
+      spawnParts(P.x-camX+P.w/2,P.y+P.h,'#ff8800',10);
+      break;
+    case 'antigrav':
+      P.antigravT=300;
+      flash('ANTIGRAV — 5s','#ffee22');
+      spawnParts(P.x-camX+P.w/2,P.y,'#ffee22',14);
+      if(AC)blip(AC.currentTime,440);
+      break;
+    case 'sticky':
+      P.stickyT=120;
+      break;
+    case 'crumble':
+      if(plat.crumbleT>0) plat.crumbleT-=4;
+      if(plat.crumbleT<=0){
+        plat.alive=false;
+        spawnParts(plat.x-camX+plat.w/2,plat.y,'#ff6633',18);
+        if(AC)blip(AC.currentTime,200);
+      }
+      break;
+    case 'teleport':
+      if(warpCooldown>0) break;
+      const others=placedPlats.filter(p=>p.type==='teleport'&&p.alive&&p!==plat);
+      if(others.length>0){
+        const t=others[Math.floor(Math.random()*others.length)];
+        P.x=t.x+t.w/2-P.w/2; P.y=t.y-P.h; P.vy=-5; P.vx=0;
+        spawnParts(t.x-camX+44,t.y,'#44ddff',22);
+        flash('WARP!','#44ddff'); warpCooldown=40;
+      } else flash('Need 2 WARP pads!','#44ddffaa');
+      break;
+    case 'ice':
+      P.iceT=90;
+      break;
+  }
+}
+
+// ═══════════════════════════════════════════
+// AABB
+// ═══════════════════════════════════════════
+function resolveAABB(obj,plat){
+  if(!plat.alive) return null;
+  if(plat.type==='phase'&&!plat.phaseOn) return null;
+  const{x:ox,y:oy,w:ow,h:oh}=obj;
+  const{x:px,y:py,w:pw,h:ph}=plat;
+  if(ox+ow<=px||ox>=px+pw||oy+oh<=py||oy>=py+ph) return null;
+  const overX=Math.min(ox+ow-px,px+pw-ox);
+  const overY=Math.min(oy+oh-py,py+ph-oy);
+  if(overY<=overX){
+    if(oy+oh/2<py+ph/2){
+      obj.y=py-oh; obj.vy=0; obj.onGround=true; return 'top';
+    } else {
+      obj.y=py+ph; obj.vy=0; obj.ceilGround=true; return 'bottom';
+    }
+  } else {
+    obj.x=ox+ow/2<px+pw/2?px-ow:px+pw; obj.vx=0; return 'side';
+  }
+}
+
+// ═══════════════════════════════════════════
+// CHECKPOINTS
+// FIX: use proper AABB overlap, store exact spawn coords per checkpoint
+// ═══════════════════════════════════════════
+function checkCPs(){
+  cpPads.forEach(cp=>{
+    if(cp.activated) return;
+    // AABB overlap test
+    if(P.x < cp.x+cp.w && P.x+P.w > cp.x && P.y < cp.y+cp.h && P.y+P.h > cp.y){
+      cp.activated=true;
+      // FIX: save the exact spawn coords this checkpoint defines
+      checkpointSpawn = { x: cp.spawnX, y: cp.spawnY };
+      flash('CHECKPOINT ✔','#00ff88');
+      spawnParts(cp.x-camX+cp.w/2, cp.y+cp.h/2, '#00ff88', 20);
+      if(AC) cpSnd(AC.currentTime);
+    }
+  });
+}
+
+// ═══════════════════════════════════════════
+// DEATH + RESPAWN
+// ═══════════════════════════════════════════
+function triggerDeath(){
+  if(isDead) return;
+  isDead=true; deathTimer=90; lives--;
+  updateLivesUI();
+  if(AC) deathSnd(AC.currentTime);
+  document.getElementById('death-screen').style.background='rgba(120,0,0,0.5)';
+  setTimeout(()=>document.getElementById('death-screen').style.background='rgba(80,0,0,0)',400);
+  flash(lives>0?`💀 -1 LIFE  (${lives} left)`:'💀 GAME OVER!','#ff2255');
+  spawnParts(P.x-camX+P.w/2,P.y+P.h/2,'#ff2255',30);
+  if(lives<=0) setTimeout(showGameOver,1200);
+}
+
+function respawnPlayer(){
+  isDead=false;
+  // FIX: always use checkpointSpawn which is updated to LAST checkpoint hit
+  P.x = checkpointSpawn.x;
+  P.y = checkpointSpawn.y;
+  P.vx=0; P.vy=0;
+  P.antigravT=0; P.iceT=0; P.stickyT=0;
+  P.onGround=false; P.ceilGround=false;
+  placedPlats=[];  // clear placed pads so puzzle can be retried fresh
+  spawnParts(P.x-camX+P.w/2, P.y+P.h/2, '#aaaaff', 20);
+  flash('RESPAWNED','#aaaaff');
+}
+
+function showGameOver(){
+  isGameOver=true;
+  document.getElementById('gameover-score').textContent='FINAL SCORE: '+score;
+  document.getElementById('gameover-screen').style.display='flex';
+}
+
+function restartGame(){
+  score=0;lives=5;isDead=false;deathTimer=0;isGameOver=false;
+  heldEchos=[];activeKeys=new Set();placedPlats=[];particles=[];
+  frame=0;camX=0;warpCooldown=0;
+  bgBase=[8,0,15];bgTarget=[8,0,15];bgPulse=0;
+  P.x=120;P.y=370;P.vx=0;P.vy=0;P.antigravT=0;P.iceT=0;P.stickyT=0;
+  P.onGround=false;P.ceilGround=false;P.jumpQueued=false;P.trail=[];
+  checkpointSpawn={x:120,y:370};
+  buildLevel();
+  updateInvUI();updateLivesUI();
+  document.getElementById('gameover-screen').style.display='none';
+  document.getElementById('score-el').textContent='SCORE: 0';
+  for(let i=0;i<4;i++){const d=document.getElementById('bd'+i);if(d)d.className='beat-dot';}
+}
+
+// ═══════════════════════════════════════════
+// UPDATE
+// ═══════════════════════════════════════════
+function update(){
+  frame++;
+  if(isGameOver) return;
+  if(warpCooldown>0) warpCooldown--;
+
+  if(isDead){
+    deathTimer--;
+    if(deathTimer<=0&&lives>0) respawnPlayer();
+    particles=particles.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.13;p.life-=p.decay;return p.life>0;});
+    for(let i=0;i<3;i++) bgBase[i]+=(bgTarget[i]-bgBase[i])*0.022;
+    bgPulse*=0.92;
+    return;
+  }
+
+  // Movement
+  const onIce=P.iceT>0, onSticky=P.stickyT>0;
+  if(isLeft()){
+    P.vx=onIce?Math.max(P.vx-0.7,-RUN_SPD*2):-RUN_SPD;
+    P.facingR=false;
+  } else if(isRight()){
+    P.vx=onIce?Math.min(P.vx+0.7,RUN_SPD*2):RUN_SPD;
+    P.facingR=true;
+  } else {
+    P.vx*=onIce?0.985:0.72;
+    if(Math.abs(P.vx)<0.08) P.vx=0;
+  }
+  if(onSticky) P.vx*=0.55;
+
+  // Jump (quantized)
+  if(P.jumpQueued&&AC){
+    const elapsed=AC.currentTime-P.jumpQueueT;
+    const bp=((AC.currentTime-songStart)/BEAT_S)%1;
+    const nb=bp<0.5?bp:1-bp;
+    const canJump=P.antigravT>0?P.ceilGround:P.onGround;
+    if((nb<SNAP_WIN||elapsed>0.36)&&canJump){
+      P.vy=P.antigravT>0?Math.abs(JUMP_V)*0.9:JUMP_V;
+      P.onGround=false;P.ceilGround=false;P.jumpQueued=false;
+      if(AC)blip(AC.currentTime,440);
+      spawnParts(P.x-camX+P.w/2,P.antigravT>0?P.y:P.y+P.h,'#aaaaff',7);
+    }
+    if(elapsed>0.55) P.jumpQueued=false;
+  }
+
+  const gravDir=P.antigravT>0?-1:1;
+  P.vy+=GRAVITY*gravDir; P.vy=Math.max(-22,Math.min(22,P.vy));
+  if(P.antigravT>0) P.antigravT--;
+  if(P.iceT>0) P.iceT--;
+  if(P.stickyT>0) P.stickyT--;
+  P.x+=P.vx; P.y+=P.vy;
+
+  // Trail
+  P.trail.push({x:P.x+P.w/2-camX,y:P.y+P.h/2,life:1});
+  if(P.trail.length>18) P.trail.shift();
+  P.trail.forEach(t=>t.life-=0.065);
+
+  // Collision
+  P.onGround=false; P.ceilGround=false;
+  [...staticPlats,...placedPlats].filter(p=>p.alive).forEach(plat=>{
+    const h=resolveAABB(P,plat);
+    if(h==='top') onLand(plat);
+  });
+
+  // Phase tick
+  placedPlats.forEach(pl=>{if(pl.type==='phase'){pl.phaseT++;pl.phaseOn=Math.floor(pl.phaseT/28)%2===0;}});
+  placedPlats=placedPlats.filter(p=>p.alive);
+
+  // Orb pickup
+  soundOrbs.forEach(o=>{
+    if(o.collected){if(o.respawnT>0){o.respawnT--;if(o.respawnT===0)o.collected=false;}return;}
+    o.pulse+=0.055;
+    if(Math.hypot(P.x+P.w/2-o.x,P.y+P.h/2-o.y)<26) pickupOrb(o);
+  });
+
+  // Checkpoints
+  checkCPs();
+
+  // Goals
+  goalPads.forEach(g=>{
+    if(g.triggered)return;
+    if(P.x+P.w>g.x&&P.x<g.x+g.w&&P.y+P.h>=g.y&&P.y+P.h<=g.y+g.h+10){
+      g.triggered=true;
+      score+=g.msg.includes('WIN')?1000:500;
+      flash('✅ '+g.msg,'#00ff88');
+      spawnParts(g.x-camX+g.w/2,g.y,'#00ff88',30);
+      if(AC){blip(AC.currentTime,1320);setTimeout(()=>blip(AC.currentTime,1760),120);}
+    }
+  });
+
+  // Signs
+  let nearSign=null,nearDist=9999;
+  signs.forEach(s=>{const d=Math.abs(P.x+P.w/2-s.x);if(d<s.range&&d<nearDist){nearDist=d;nearSign=s;}});
+  if(nearSign)showHint(nearSign.text); else hideHint();
+
+  // Camera
+  camX+=(P.x-W/3.2-camX)*0.1;
+  camX=Math.max(0,Math.min(WORLD_W-W,camX));
+  if(P.x<0)P.x=0;
+  if(P.x>WORLD_W-P.w)P.x=WORLD_W-P.w;
+
+  // Fall death
+  if(P.y>H+60) triggerDeath();
+
+  particles=particles.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.13;p.life-=p.decay;return p.life>0;});
+  for(let i=0;i<3;i++) bgBase[i]+=(bgTarget[i]-bgBase[i])*0.022;
+  bgPulse*=0.92;
+  beatFlash=beatFlash.map(f=>f*0.87);
+}
+
+// ═══════════════════════════════════════════
+// DRAW
+// ═══════════════════════════════════════════
+function draw(){
+  const deathRed=isDead?Math.floor((1-deathTimer/90)*35):0;
+  ctx.fillStyle=`rgb(${Math.min(255,Math.floor(bgBase[0]+bgPulse*28)+deathRed)},${Math.min(255,Math.floor(bgBase[1]+bgPulse*18))},${Math.min(255,Math.floor(bgBase[2]+bgPulse*38))})`;
+  ctx.fillRect(0,0,W,H);
+
+  const ga=0.04+bgPulse*0.09;
+  ctx.strokeStyle=`rgba(70,30,150,${ga})`;ctx.lineWidth=1;
+  const gox=(((-camX)*0.5)%60+60)%60;
+  for(let x=gox;x<W;x+=60){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
+  for(let y=0;y<H;y+=60){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+
+  ctx.fillStyle='rgba(255,255,255,0.3)';
+  for(let i=0;i<40;i++){const sx=((i*149+camX*0.18)%W+W)%W,sy=(i*97+20)%(H-40);ctx.beginPath();ctx.arc(sx,sy,0.5+(i%3)*0.4,0,Math.PI*2);ctx.fill();}
+
+  ctx.save();ctx.translate(-camX,0);
+
+  [...staticPlats,...placedPlats].filter(p=>p.alive).forEach(drawPlat);
+
+  // Checkpoint flags
+  cpPads.forEach(cp=>{
+    ctx.fillStyle=cp.activated?'#224422':'#221133';
+    ctx.fillRect(cp.x,cp.y,cp.w,cp.h);
+    ctx.fillStyle=cp.activated?'#00ff88aa':'#4422aa66';
+    ctx.fillRect(cp.x,cp.y,cp.w,3);
+    ctx.fillStyle=cp.activated?'#00aa55':'#442266';
+    ctx.fillRect(cp.x+cp.w/2-1,cp.y-26,3,26);
+    ctx.fillStyle=cp.activated?'#00ff88':'#664488';
+    ctx.beginPath();ctx.moveTo(cp.x+cp.w/2+2,cp.y-26);ctx.lineTo(cp.x+cp.w/2+18,cp.y-20);ctx.lineTo(cp.x+cp.w/2+2,cp.y-14);ctx.fill();
+    if(cp.activated){ctx.shadowColor='#00ff88';ctx.shadowBlur=10;ctx.strokeStyle='#00ff8833';ctx.lineWidth=1;ctx.strokeRect(cp.x,cp.y,cp.w,cp.h);ctx.shadowBlur=0;ctx.shadowColor='transparent';}
+    ctx.fillStyle=cp.activated?'#00ff88':'#664488';
+    ctx.font='8px Courier New';ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText('CP',cp.x+cp.w/2,cp.y-28);
+  });
+
+  goalPads.forEach(g=>{
+    const pulse=(Math.sin(frame/10)+1)*0.5;
+    ctx.shadowColor=g.triggered?'#003300':'#00ff88';ctx.shadowBlur=g.triggered?3:10+pulse*8;
+    ctx.fillStyle=g.triggered?'#002200':'#003300';ctx.fillRect(g.x,g.y,g.w,g.h);
+    ctx.fillStyle=g.triggered?'#006600':'#00ff88';ctx.fillRect(g.x,g.y,g.w,3);
+    ctx.shadowBlur=0;ctx.shadowColor='transparent';
+    ctx.fillStyle=g.triggered?'#006600':'#00ff88';ctx.font='9px Courier New';
+    ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText(g.triggered?'✅':'★ GOAL',g.x+g.w/2,g.y-3);
+  });
+
+  signs.forEach(s=>{
+    if(Math.abs(P.x+P.w/2-s.x)>s.range*1.5)return;
+    ctx.fillStyle='#442266cc';ctx.beginPath();ctx.arc(s.x,s.y-10,7,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#cc88ff';ctx.font='bold 10px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('?',s.x,s.y-10);
+  });
+
+  soundOrbs.forEach(drawOrb);
+
+  P.trail.forEach((t,i)=>{
+    const a=t.life*0.32,sz=(i/P.trail.length)*5,hue=(frame*2+i*18)%360;
+    ctx.beginPath();ctx.arc(t.x+camX,t.y,sz,0,Math.PI*2);
+    ctx.fillStyle=`hsla(${hue},100%,70%,${a})`;ctx.fill();
+  });
+
+  if(!isDead||deathTimer>60) drawPlayer();
+  if(isDead&&deathTimer%12<6){ctx.fillStyle='rgba(255,50,50,0.5)';ctx.fillRect(P.x,P.y,P.w,P.h);}
+
+  ctx.restore();
+
+  particles.forEach(p=>{
+    ctx.beginPath();ctx.arc(p.x,p.y,p.size*p.life,0,Math.PI*2);
+    ctx.fillStyle=p.color+Math.floor(p.life*255).toString(16).padStart(2,'0');ctx.fill();
+  });
+
+  document.getElementById('score-el').textContent='SCORE: '+score;
+  drawMinimap();
+}
+
+function drawPlat(plat){
+  if(plat.type==='phase')ctx.globalAlpha=plat.phaseOn?1:0.2;
+  const s=PS[plat.type]||PS.normal;
+  if(plat.isPlaced&&s.glow){ctx.shadowColor=s.glow;ctx.shadowBlur=8+Math.sin(frame/12)*3;}
+  ctx.fillStyle=s.fill;ctx.fillRect(plat.x,plat.y,plat.w,plat.h);
+  ctx.fillStyle=s.top;ctx.fillRect(plat.x,plat.y,plat.w,3);
+  if(plat.type==='bounce'){const p=(Math.sin(frame/8)+1)*0.5;ctx.fillStyle=`rgba(255,34,85,${p*0.28})`;ctx.fillRect(plat.x,plat.y,plat.w,plat.h);}
+  if(plat.type==='crumble'&&plat.crumbleT<80){
+    const nc=Math.ceil((80-plat.crumbleT)/26);ctx.strokeStyle='#ff663355';ctx.lineWidth=1;
+    for(let c=0;c<nc;c++){ctx.beginPath();ctx.moveTo(plat.x+14+c*20,plat.y);ctx.lineTo(plat.x+20+c*20,plat.y+plat.h);ctx.stroke();}
+  }
+  ctx.shadowBlur=0;ctx.shadowColor='transparent';ctx.globalAlpha=1;
+  if(plat.isPlaced&&s.label){
+    ctx.fillStyle=s.top;ctx.font='8px Courier New';ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText(s.label,plat.x+plat.w/2,plat.y-3);
+  }
+}
+
+function drawOrb(o){
+  if(o.collected)return;
+  const echo=ECHOES[o.type],pulsed=Math.sin(o.pulse*2.8)*0.35+0.65,r=17*pulsed;
+  const grd=ctx.createRadialGradient(o.x,o.y,0,o.x,o.y,r*2.8);
+  grd.addColorStop(0,echo.color+'cc');grd.addColorStop(1,echo.color+'00');
+  ctx.fillStyle=grd;ctx.beginPath();ctx.arc(o.x,o.y,r*2.8,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(o.x,o.y,r,0,Math.PI*2);ctx.fillStyle=echo.color;ctx.fill();
+  ctx.fillStyle='#000000cc';ctx.font=`${Math.floor(r*0.9)}px serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('♪',o.x,o.y);
+  ctx.fillStyle=echo.color;ctx.font='10px Courier New';ctx.textBaseline='alphabetic';ctx.fillText(echo.name,o.x,o.y-r-6);
+  ctx.fillStyle=echo.color+'bb';ctx.font='8px Courier New';ctx.fillText('→ '+echo.sub,o.x,o.y-r-17);
+}
+
+function drawPlayer(){
+  if(activeKeys.size>0){
+    const ec=ECHOES[[...activeKeys][activeKeys.size-1]].color;
+    const grd=ctx.createRadialGradient(P.x+P.w/2,P.y+P.h/2,0,P.x+P.w/2,P.y+P.h/2,28);
+    grd.addColorStop(0,ec+'66');grd.addColorStop(1,ec+'00');
+    ctx.fillStyle=grd;ctx.beginPath();ctx.arc(P.x+P.w/2,P.y+P.h/2,28,0,Math.PI*2);ctx.fill();
+  }
+  if(P.antigravT>0){
+    ctx.save();
+    ctx.translate(P.x+P.w/2,P.y+P.h/2);
+    ctx.scale(1,-1);
+    ctx.translate(-(P.x+P.w/2),-(P.y+P.h/2));
+  }
+  ctx.fillStyle=P.antigravT>0?'#ffff66':'#dde0ff';
+  ctx.fillRect(P.x,P.y,P.w,P.h);
+  const vc=activeKeys.size>0?ECHOES[[...activeKeys][0]].color:'#6688ff';
+  ctx.fillStyle=vc;ctx.fillRect(P.x+3,P.y+6,P.w-6,8);
+  ctx.fillStyle='#00000099';ctx.fillRect(P.x+5,P.y+8,4,4);ctx.fillRect(P.x+13,P.y+8,4,4);
+  if(P.antigravT>0)ctx.restore();
+  if(P.iceT>0){ctx.strokeStyle='#7766ffaa';ctx.lineWidth=2;ctx.strokeRect(P.x,P.y,P.w,P.h);}
+  if(P.stickyT>0){ctx.fillStyle='#00ffcc88';for(let d=0;d<3;d++)ctx.fillRect(P.x+3+d*7,P.y+P.h-6,4,4);}
+  if(P.antigravT>0){
+    const pct=P.antigravT/300;
+    ctx.fillStyle='#ffff2244';ctx.fillRect(P.x,P.y-6,P.w,4);
+    ctx.fillStyle='#ffff22';ctx.fillRect(P.x,P.y-6,P.w*pct,4);
+  }
+}
+
+function drawMinimap(){
+  const mw=160,mh=22,mx=W-mw-10,my=8;
+  ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(mx,my,mw,mh);
+  ctx.strokeStyle='#332255';ctx.lineWidth=1;ctx.strokeRect(mx,my,mw,mh);
+  const sc=mw/WORLD_W;
+  goalPads.forEach(g=>{ctx.fillStyle=g.triggered?'#006600':'#00ff88';ctx.fillRect(mx+g.x*sc,my+2,Math.max(2,g.w*sc),mh-4);});
+  cpPads.forEach(cp=>{ctx.fillStyle=cp.activated?'#00ff8888':'#44228866';ctx.fillRect(mx+cp.x*sc,my+2,2,mh-4);});
+  ctx.fillStyle='#00ff8855';ctx.fillRect(mx+checkpointSpawn.x*sc,my+1,2,mh-2);
+  ctx.fillStyle='#ffffff';ctx.fillRect(mx+P.x*sc-1,my+3,3,mh-6);
+}
+
+function showHint(t){const el=document.getElementById('puzzle-hint');if(el.textContent===t&&el.style.opacity==='1')return;el.textContent=t;el.style.opacity='1';}
+function hideHint(){document.getElementById('puzzle-hint').style.opacity='0';}
+
+function updateInvUI(){
+  const bar=document.getElementById('inv-bar');bar.innerHTML='';
+  if(heldEchos.length===0){bar.innerHTML='<span style="color:#2a1844;font-size:11px;">No echoes — walk into ♪ orbs. Beat plays on pickup. Press 1–9 to place pad under your feet.</span>';return;}
+  heldEchos.forEach((key,i)=>{
+    const echo=ECHOES[key],active=activeKeys.has(key);
+    const chip=document.createElement('div');chip.className='echo-chip';
+    chip.style.background=echo.dark;
+    chip.style.borderColor=active?echo.color:'rgba(255,255,255,0.1)';
+    chip.style.boxShadow=active?`0 0 10px ${echo.color}55`:'none';
+    chip.innerHTML=`<span class="chip-key">[${i+1}] place | SHIFT+${i+1} discard</span><span class="chip-name" style="color:${echo.color}">${echo.name}</span><span class="chip-sub">${echo.sub}</span><div class="chip-bar" style="background:${echo.color};width:${active?'100':'0'}%"></div>`;
+    chip.addEventListener('click',()=>placeSlot(i));
+    chip.addEventListener('contextmenu',e=>{e.preventDefault();discardSlot(i);});
+    bar.appendChild(chip);
+  });
+}
+function updateLivesUI(){for(let i=0;i<5;i++){const el=document.getElementById('lh'+i);if(el)el.className='life-heart'+(i>=lives?' dead':'');}}
+function spawnParts(x,y,color,count=14){for(let i=0;i<count;i++){const a=(Math.PI*2/count)*i+Math.random()*0.5,sp=1.2+Math.random()*3;particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-2,color,life:1,decay:0.022+Math.random()*0.03,size:2+Math.random()*3.5});}}
+function flash(text,color='#ffffff'){const el=document.getElementById('flash-el');el.textContent=text;el.style.color=color;el.style.textShadow=`0 0 20px ${color}`;el.style.opacity='1';clearTimeout(flashTimer);flashTimer=setTimeout(()=>el.style.opacity='0',1300);}
+function shiftBg(key){const m={KICK:[35,0,12],SNARE:[30,14,0],HIHAT:[26,24,0],OPENHAT:[26,18,0],BASS:[0,28,20],LEAD:[18,5,40],ARP:[5,32,40],PAD:[12,10,35]};bgTarget=m[key]||[8,0,15];}
+
+function loop(){update();draw();requestAnimationFrame(loop);}
+updateInvUI();updateLivesUI();
+loop();
+</script>
+</body>
+</html>
