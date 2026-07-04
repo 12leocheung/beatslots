@@ -16,14 +16,19 @@
   canvas{image-rendering:pixelated;background:var(--ink);max-width:100vw;max-height:100vh}
   #hud{position:absolute;inset:0;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between;padding:10px 14px}
   /* slot rack */
-  #rack{display:flex;gap:6px;align-items:flex-end;justify-content:center;margin-top:2px}
-  .slot{width:52px;height:52px;border:2px solid var(--grid);background:rgba(20,26,46,.85);position:relative;
+  #rack{display:flex;flex-direction:column;gap:4px;align-items:center;margin-top:2px}
+  .rackrow{display:flex;gap:6px;align-items:flex-end}
+  .bartag{width:26px;font-size:11px;letter-spacing:1px;color:#8a93b8;text-align:right;padding-bottom:18px}
+  .slot{width:48px;height:48px;border:2px solid var(--grid);background:rgba(20,26,46,.85);position:relative;
         display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:11px;letter-spacing:1px;
         transition:transform .08s}
   .slot .cd{position:absolute;left:0;bottom:0;width:100%;background:rgba(0,0,0,.65);pointer-events:none}
   .slot.playhead{border-color:var(--text);transform:translateY(-4px)}
   .slot.selected{border-color:var(--gold);box-shadow:0 0 0 2px var(--gold) inset}
   .slot small{position:absolute;top:2px;left:4px;opacity:.5;font-size:9px}
+  #crt{position:absolute;inset:0;pointer-events:none;z-index:5;
+       background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,0,0,.10) 2px 3px);
+       box-shadow:inset 0 0 140px rgba(0,0,0,.55)}
   #msg{ text-align:center;font-size:13px;letter-spacing:1px;min-height:18px;text-shadow:0 0 6px #000}
   #bottom{display:flex;justify-content:space-between;align-items:flex-end;font-size:12px;letter-spacing:1px}
   #beatring{position:absolute;left:50%;top:96px;transform:translateX(-50%);width:14px;height:14px;border-radius:50%;
@@ -64,11 +69,12 @@
     A/D or ←/→ move &nbsp; W/↑ jump (on beat = boost)<br>
     SHIFT air-dash (on beat)<br>
     J melee &nbsp; K shoot — only counts ON BEAT<br>
-    E activate playhead slot (on beat)<br>
-    1–8 select slot, press another to swap<br>
-    T trade at station
+    E activate bar A &nbsp; Q activate bar B<br>
+    1–8 select slot, again to swap &nbsp; TAB switch bar<br>
+    T trade at station · spikes &amp; lasers fire ON the beat
   </div>
   <div id="cheat"></div>
+  <div id="crt"></div>
   <div id="start">
     <h1>BEAT<span>SLOTS</span></h1>
     <p>Enemies march on the beat. Kill them <b>on the beat</b> to steal pieces of music.
@@ -96,19 +102,19 @@ const PIECES = {
 const PIECE_KEYS = Object.keys(PIECES);
 
 /* ============ LEVEL ============ */
-// tilemap strings: # solid, . air, S station, F flag, e/E enemies (E tougher), P player
+// tilemap: # solid, . air, S station, F flag, e/E enemies, ^ beat spikes, ! beat laser, U second-bar upgrade
 let MAP = [
 "........................................................................................................................................",
 "........................................................................................................................................",
 "...............................................................................................................e.......................",
 "..........................................................................................E..................#####......................",
-"........................................e.............................#####.............######..........................e..............",
-"......................................######..................e.................e...................####...............####.............",
+"..............................!.........e.............................#####...........U.######..........................e..............",
+"......................................######..................e.........!.......e...................####..........!....####.............",
 "...........................e.....................####......#####.............####.......................................E.....F.......",
 ".................####..........####.......................................................e.......e.....E.............########.#######.",
 "..........e..................................E..........e..............S..............#######..#######.........####.....................",
 ".......................e..........####...#######....#####...........#####......e...............................................E.......",
-"...P...........####........................................#####..............####....................e...............e.......####.....",
+"...P...........####...^^...................................#####..^^..........####...^^^.............e...............e.......####.....",
 "########..#########...######..######..........####.......................................####.....#########....######............#####.",
 "########..#########...######..######..####....####...S................####...............####.....#########....######............#####.",
 "########..#########...######..######..####....####..######......###...####...............####.....#########....######............#####.",
@@ -121,19 +127,28 @@ const solidAt = (tx,ty)=> tx<0||tx>=MAPW ? true : (ty<0||ty>=MAPH ? false : (MAP
 /* ============ STATE ============ */
 let audio=null, started=false;
 let beatCount=-1, nextBeat=0, playhead=-1;
-let slots = new Array(SLOTS).fill(null);          // piece keys or null
+let slots = new Array(SLOTS).fill(null);          // bar A
+let slotsB = new Array(SLOTS).fill(null);         // bar B (locked until upgrade)
+let barUnlocked=false, activeRack=0;
+let combo=0,bestCombo=0;
 let cooldowns = {};                                // pieceKey -> beats remaining
 PIECE_KEYS.forEach(k=>cooldowns[k]=0);
-let selectedSlot=-1;
+let selectedSlot=-1;                               // global index 0..15
+const slotAt=g=>g<SLOTS?slots[g]:slotsB[g-SLOTS];
+const setSlot=(g,v)=>{if(g<SLOTS)slots[g]=v;else slotsB[g-SLOTS]=v;};
 let slowTime=0;                                    // seconds of ARP slow remaining
 let msgTimer=0;
 
 const player = {x:0,y:0,vx:0,vy:0,w:20,h:28,onGround:false,face:1,hp:5,maxhp:5,
                 canDash:true,dashT:0,inv:0,dead:false,won:false};
 let enemies=[], bullets=[], pickups=[], platforms=[], particles=[], stations=[], flag={x:0,y:0};
+let spikes=[], lasers=[], upgrades=[];
 
 function buildLevel(){
   enemies=[];pickups=[];platforms=[];particles=[];bullets=[];stations=[];popups=[];rings=[];ghosts=[];
+  spikes=[];lasers=[];upgrades=[];
+  const floorBelow=(tx,ty)=>{for(let y2=ty;y2<MAPH;y2++)if(solidAt(tx,y2))return y2;return -1;};
+  const ceilAbove =(tx,ty)=>{for(let y2=ty;y2>=0;y2--)if(solidAt(tx,y2))return y2;return -1;};
   for(let y=0;y<MAPH;y++)for(let x=0;x<MAPW;x++){
     const c=MAP[y][x], px=x*TILE, py=y*TILE;
     if(c==='P'){player.x=px;player.y=py;}
@@ -141,6 +156,12 @@ function buildLevel(){
     if(c==='E')enemies.push(mkEnemy(px,py,3));
     if(c==='S')stations.push({x:px,y:py,used:false});
     if(c==='F')flag={x:px,y:py};
+    if(c==='^'){const fy=floorBelow(x,y); if(fy>0)spikes.push({x:px,y:fy*TILE,ext:0});}
+    if(c==='!'){
+      const cy=ceilAbove(x,y), fy=floorBelow(x,y);
+      lasers.push({x:px+TILE/2, top:(cy>=0?(cy+1)*TILE:py), bot:(fy>0?fy*TILE:MAPH*TILE), charge:0, firing:false});
+    }
+    if(c==='U')upgrades.push({x:px+4,y:py+4,t:0});
   }
 }
 function mkEnemy(x,y,hp){
@@ -188,7 +209,12 @@ function playPiece(key,slotIdx,t,vol=1){
 // backing-layer rhythm: while a piece is owned it keeps time quietly on its own pattern
 const BACKING={ KICK:{every:2,off:0}, SNARE:{every:2,off:1}, BASS:{every:1,off:0}, ARP:{every:4,off:2}, LEAD:{every:4,off:0} };
 const BACKING_VOL={ KICK:0.3, SNARE:0.3, BASS:0.22, ARP:0.3, LEAD:0.35 };
-function tick(t){osc('square',2200,t,0.001,0.02,0.03);}
+function tick(t,down){
+  noise(t,0.03,0.05,7000);                          // closed hat every beat
+  if(down)osc('square',2200,t,0.001,0.02,0.04);     // accent blip on the 1
+}
+function sfxSpike(t){osc('sawtooth',900,t,0.002,0.06,0.08,300);}
+function sfxLaser(t){osc('sawtooth',1400,t,0.004,0.22,0.07,200);noise(t,0.15,0.05,3000);}
 function sfxHit(good){ if(!audio)return; const t=audio.currentTime;
   good?osc('square',880,t,0.002,0.08,0.12,1320):osc('sawtooth',160,t,0.002,0.1,0.1,80);}
 function sfxPickup(){const t=audio.currentTime;osc('square',660,t,0.002,0.05,0.1);osc('square',990,t+0.06,0.002,0.08,0.1);}
@@ -199,20 +225,29 @@ function onBeat(){
   beatCount++;
   playhead=(playhead+1)%SLOTS;
   const t=nextBeat;
-  tick(t);
-  const key=slots[playhead];
-  if(key)playPiece(key,playhead,t);                 // full volume on its own slot
+  tick(t,beatCount%4===0);
+  const keyA=slots[playhead];
+  const keyB=barUnlocked?slotsB[playhead]:null;
+  if(keyA)playPiece(keyA,playhead,t);               // bar A full volume
+  if(keyB&&keyB!==keyA)playPiece(keyB,playhead,t,0.8); // bar B synced, slightly under
   // quiet backing layers: each owned instrument keeps its own rhythm underneath
-  const owned=new Set(slots.filter(Boolean));
-  if(key)owned.delete(key);                          // don't double-hit the loud one
+  const owned=new Set([...slots,...(barUnlocked?slotsB:[])].filter(Boolean));
+  if(keyA)owned.delete(keyA); if(keyB)owned.delete(keyB);
   for(const k of owned){
     const b=BACKING[k];
     if(beatCount%b.every===b.off){
-      const idx=slots.indexOf(k);                    // pitch from its first slot
-      playPiece(k,idx,t,BACKING_VOL[k]);
+      const idx=Math.max(slots.indexOf(k),slotsB.indexOf(k)); // pitch from a slot it sits in
+      playPiece(k,idx<0?0:idx%SLOTS,t,BACKING_VOL[k]);
     }
   }
   PIECE_KEYS.forEach(k=>{if(cooldowns[k]>0)cooldowns[k]--;});
+  // --- beat-synced hazards ---
+  const sp=beatCount%4;                      // spikes: warn on 3, OUT on 0,1
+  for(const s of spikes)s.target=(sp<2)?1:0;
+  if(sp===0&&spikes.length)sfxSpike(t);
+  const lp=beatCount%8;                      // lasers: charge on 6,7, FIRE on 0,1
+  for(const l of lasers){l.warn=(lp>=6);const was=l.firing;l.firing=(lp<2);
+    if(l.firing&&!was)sfxLaser(t);}
   // enemies hop one tile per beat: pure patrol, turn around at edges and walls
   const canStep=(e,d)=>{
     const tx=Math.floor((e.x+e.w/2+d*TILE)/TILE), ty=Math.floor((e.y+e.h)/TILE);
@@ -243,18 +278,20 @@ const ALIAS={arrowleft:'a',arrowright:'d',arrowup:'w',arrowdown:'s'};
 const normKey=e=>{const k=e.key.toLowerCase();return ALIAS[k]||k;};
 addEventListener('keydown',e=>{
   if(e.repeat)return; const k=normKey(e); keys[k]=true;
-  if(k==='a'||k==='d'||k==='w'||k===' ')e.preventDefault();
+  if(k==='a'||k==='d'||k==='w'||k===' '||k==='tab')e.preventDefault();
   if(!started)return;
-  if(k>='1'&&k<='8'){ const i=+k-1;
-    if(selectedSlot<0)selectedSlot=i;
-    else{ [slots[selectedSlot],slots[i]]=[slots[i],slots[selectedSlot]]; selectedSlot=-1; renderRack(); }
+  if(k>='1'&&k<='8'){ const g=activeRack*SLOTS+(+k-1);
+    if(selectedSlot<0)selectedSlot=g;
+    else{ const tmp=slotAt(selectedSlot); setSlot(selectedSlot,slotAt(g)); setSlot(g,tmp); selectedSlot=-1; }
     renderRack();
   }
+  if(k==='tab'&&barUnlocked){activeRack=1-activeRack;showMsg('editing bar '+(activeRack?'B':'A'),'#e8ecff');renderRack();}
   if(k==='w'||k===' ')doJump();
   if(k==='shift')doDash();
   if(k==='j')doMelee();
   if(k==='k')doShoot();
-  if(k==='e')doActivate();
+  if(k==='e')doActivate(0);
+  if(k==='q'&&barUnlocked)doActivate(1);
   if(k==='t')doTrade();
   if(k==='r'&&(player.dead||player.won))restart();
 });
@@ -268,7 +305,7 @@ function doJump(){
     const boost=isOnBeat();
     player.vy = boost?-980:-760;
     player.sx=0.7;player.sy=1.35;
-    if(boost){popup(player.x+10,player.y-8,'BOOST!','#4de8b4');burst(player.x+10,player.y+28,'#4de8b4',8);ring(player.x+10,player.y+28,'#4de8b4',44);}
+    if(boost){popup(player.x+10,player.y-8,'BOOST!','#4de8b4');burst(player.x+10,player.y+28,'#4de8b4',8);ring(player.x+10,player.y+28,'#4de8b4',44);beatAction(true);}
   }
 }
 function doDash(){
@@ -277,8 +314,8 @@ function doDash(){
     player.canDash=false;player.dashT=0.16;player.vy=0;
     player.sx=1.5;player.sy=0.6;
     burst(player.x+10,player.y+14,'#5cc8ff',10);addShake(4,0.12);
-    popup(player.x+10,player.y-8,'DASH','#5cc8ff');
-  } else if(!player.onGround&&!isOnBeat()){ showMsg('dash: off beat','#888'); }
+    popup(player.x+10,player.y-8,'DASH','#5cc8ff');beatAction(true);
+  } else if(!player.onGround&&!isOnBeat()){ showMsg('dash: off beat','#888');beatAction(false); }
 }
 function attackHit(range,dmg){
   const good=isOnBeat();
@@ -294,6 +331,7 @@ function attackHit(range,dmg){
     }
   }
   sfxHit(good&&hit);
+  if(hit)beatAction(good);
   if(hit&&!good)showMsg('OFF BEAT — no damage','var(--hot)');
   return good;
 }
@@ -318,17 +356,26 @@ function doShoot(){
   const good=isOnBeat(), power=player.powerShots>0;
   if(power)player.powerShots--;
   bullets.push({x:player.x+10,y:player.y+12,vx:player.face*760,good,dmg:power?3:1,power});
-  sfxHit(good);
+  sfxHit(good);beatAction(good);
   if(!good)showMsg('OFF BEAT — dud shot','var(--hot)');
 }
+function beatAction(ok){
+  if(ok){combo++;bestCombo=Math.max(bestCombo,combo);
+    if(combo>0&&combo%4===0){popup(player.x+10,player.y-20,'COMBO ×'+combo,'#ffd166');addShake(3,0.1);
+      if(audio)osc('square',SCALE[Math.min(7,combo/4)]*2,audio.currentTime,0.003,0.09,0.08);}
+  } else combo=0;
+  renderRack();
+}
 player.powerShots=0;
-function doActivate(){
+function doActivate(rack){
   if(player.dead||player.won)return;
-  const key=slots[playhead];
+  const arr=rack?slotsB:slots;
+  const key=arr[playhead];
   if(!key){showMsg('empty slot','#888');return;}
-  if(!isOnBeat()){showMsg('OFF BEAT','var(--hot)');return;}
+  if(!isOnBeat()){showMsg('OFF BEAT','var(--hot)');beatAction(false);return;}
   if(cooldowns[key]>0){showMsg(PIECES[key].label+' cooling down','#888');return;}
   cooldowns[key]=PIECES[key].cd;
+  beatAction(true);
   const px=Math.floor((player.x+player.w/2)/TILE), py=Math.floor((player.y+player.h)/TILE);
   if(key==='KICK'){ platforms.push({x:px*TILE-TILE,y:py*TILE+ (player.onGround?-0: (TILE- (player.y+player.h)%TILE)),w:TILE*3,life:4*BEAT*2});
     // simpler: platform right under feet
@@ -344,12 +391,12 @@ function doTrade(){
   const near=stations.find(s=>Math.abs(s.x-player.x)<40&&Math.abs(s.y-player.y)<60);
   if(!near){return;}
   if(near.used){showMsg('station used up','#888');return;}
-  const i = selectedSlot>=0?selectedSlot:playhead;
-  if(!slots[i]){showMsg('select a filled slot (1–8) to trade','#888');return;}
-  const cur=PIECE_KEYS.indexOf(slots[i]);
-  slots[i]=PIECE_KEYS[(cur+1)%PIECE_KEYS.length];
+  const g = selectedSlot>=0?selectedSlot:playhead;
+  if(!slotAt(g)){showMsg('select a filled slot to trade','#888');return;}
+  const cur=PIECE_KEYS.indexOf(slotAt(g));
+  setSlot(g,PIECE_KEYS[(cur+1)%PIECE_KEYS.length]);
   near.used=true;
-  sfxPickup(); showMsg('traded → '+PIECES[slots[i]].label+' (station spent)',PIECES[slots[i]].col);
+  sfxPickup(); showMsg('traded → '+PIECES[slotAt(g)].label+' (station spent)',PIECES[slotAt(g)].col);
   ring(near.x+12,near.y+8,'#ffd166',60);
   renderRack();
 }
@@ -363,7 +410,8 @@ function killEnemy(e){
   addShake(7,0.22);hitstop=0.09;
 }
 function restart(){
-  slots.fill(null);player.hp=player.maxhp;player.dead=false;player.won=false;
+  slots.fill(null);slotsB.fill(null);barUnlocked=false;activeRack=0;combo=0;
+  player.hp=player.maxhp;player.dead=false;player.won=false;
   player.vx=0;player.vy=0;player.powerShots=0;player.canDash=true;
   PIECE_KEYS.forEach(k=>cooldowns[k]=0);
   buildLevel();renderRack();showMsg('');
@@ -410,6 +458,7 @@ function hurt(d){
   if(player.inv>0||player.dead)return;
   player.hp-=d;player.inv=1.2;sfxHurt();burst(player.x+10,player.y+14,'#ff4d6d',12);
   addShake(10,0.3);hitstop=0.08;popup(player.x+10,player.y-8,'-'+d,'#ff4d6d');
+  combo=0;renderRack();
   if(player.hp<=0){player.dead=true;showMsg('YOU DIED — press R','var(--hot)');}
 }
 
@@ -474,12 +523,37 @@ function update(dt){
     const ty=Math.floor((p.y+16)/TILE),tx=Math.floor((p.x+8)/TILE);
     if(solidAt(tx,ty)&&p.vy>0){p.y=ty*TILE-16;p.vy=0;}
     if(rect({x:p.x,y:p.y,w:16,h:16},player)){
-      const free=slots.indexOf(null);
-      if(free>=0){slots[free]=p.key;p.dead=true;sfxPickup();showMsg('+ '+PIECES[p.key].label+' ('+PIECES[p.key].desc+')',PIECES[p.key].col);renderRack();}
+      let free=slots.indexOf(null);
+      if(free<0&&barUnlocked){const f2=slotsB.indexOf(null);if(f2>=0)free=SLOTS+f2;}
+      if(free>=0){setSlot(free,p.key);p.dead=true;sfxPickup();showMsg('+ '+PIECES[p.key].label+' ('+PIECES[p.key].desc+')',PIECES[p.key].col);renderRack();}
       else if(p.t>1){showMsg('rack full — trade or swap','#888');p.t=0;}
     }
   }
   pickups=pickups.filter(p=>!p.dead);
+  // second-bar upgrade item
+  for(const u of upgrades){ u.t+=dt;
+    if(rect({x:u.x,y:u.y,w:24,h:24},player)){
+      u.dead=true;barUnlocked=true;
+      showMsg('★ SECOND BAR UNLOCKED — Q activates it, TAB edits it ★','var(--gold)');
+      popup(player.x+10,player.y-24,'BAR B ONLINE','#ffd166');
+      ring(player.x+10,player.y+14,'#ffd166',140);addShake(6,0.25);
+      if(audio){const t2=audio.currentTime;[0,4,7,4,0].forEach((s,i)=>osc('square',SCALE[s]*4,t2+i*0.07,0.003,0.1,0.09));}
+      renderRack();
+    }
+  }
+  upgrades=upgrades.filter(u=>!u.dead);
+  // --- beat hazards ---
+  for(const s of spikes){
+    s.ext+=( (s.target||0)-s.ext )*Math.min(1,dt*18);
+    if(s.ext>0.6&&!player.dead&&player.inv<=0&&
+       rect({x:s.x+3,y:s.y-20*s.ext,w:TILE-6,h:20*s.ext},player))hurt(1);
+  }
+  for(const l of lasers){
+    if(l.firing&&!player.dead&&player.inv<=0&&
+       rect({x:l.x-5,y:l.top,w:10,h:l.bot-l.top},player))hurt(1);
+    if(l.firing&&Math.random()<0.5)particles.push({x:l.x+(Math.random()*8-4),y:l.bot-2,
+      vx:(Math.random()*2-1)*160,vy:-Math.random()*220,col:'#ff4d6d',life:0.3});
+  }
   // platforms decay
   for(const p of platforms)p.life-=dt;
   platforms=platforms.filter(p=>p.life>0);
@@ -501,7 +575,12 @@ const rect=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
 const cv=document.getElementById('cv'),cx=cv.getContext('2d');
 let cam={x:0,y:0};
 function draw(){
+  cx.setTransform(1,0,0,1,0,0);
   cx.clearRect(0,0,W,H);
+  // beat-pump zoom: whole frame breathes with the music, harder with combo
+  {const {p:zp}=beatPhase();const zt=Math.pow(1-Math.min(1,zp*2),2)*pulse;
+   const z=1+zt*0.018+Math.min(combo,20)*0.0008;
+   cx.setTransform(z,0,0,z,W/2*(1-z),H/2*(1-z));}
   cam.x+= ((player.x-W/2+120)-cam.x)*0.12;
   cam.y+= ((player.y-H/2)-cam.y)*0.12;
   cam.x=Math.max(0,Math.min(cam.x,MAPW*TILE-W));
@@ -553,6 +632,47 @@ function draw(){
     cx.strokeStyle=col;cx.lineWidth=2;cx.strokeRect(s.x-8,s.y-14,40,44);
     cx.fillStyle=col;cx.font='bold 14px monospace';cx.fillText(s.used?'✕':'⇄',s.x+4,s.y+12);
     cx.font='9px monospace';cx.fillText(s.used?'USED':'TRADE [T]',s.x-14,s.y-20);
+  }
+  // beat spikes: rise from the floor on the downbeat, glow warning the beat before
+  const spWarn=(beatCount%4===3);
+  for(const s of spikes){
+    if(spWarn){cx.fillStyle=`rgba(255,77,109,${0.35+0.4*Math.sin(performance.now()/60)})`;
+      cx.fillRect(s.x+2,s.y-3,TILE-4,3);}
+    if(s.ext>0.03){
+      const h2=20*s.ext;
+      cx.fillStyle='#ff4d6d';
+      for(let i=0;i<3;i++){const bx2=s.x+3+i*(TILE-6)/3;
+        cx.beginPath();cx.moveTo(bx2,s.y);cx.lineTo(bx2+(TILE-6)/6,s.y-h2);cx.lineTo(bx2+(TILE-6)/3,s.y);cx.fill();}
+      cx.fillStyle=`rgba(255,255,255,${0.5*s.ext})`;
+      for(let i=0;i<3;i++){const bx2=s.x+3+i*(TILE-6)/3;
+        cx.fillRect(bx2+(TILE-6)/6-1,s.y-h2,2,4);}
+    }
+  }
+  // beat lasers: emitter pod, charge flicker, then a fat beam
+  for(const l of lasers){
+    cx.fillStyle='#141a2e';cx.fillRect(l.x-8,l.top,16,12);
+    cx.strokeStyle=l.firing?'#ff4d6d':(l.warn?'#ffd166':'#3a4468');cx.lineWidth=2;
+    cx.strokeRect(l.x-8,l.top,16,12);
+    if(l.warn&&!l.firing&&Math.floor(performance.now()/70)%2){
+      cx.strokeStyle='rgba(255,209,102,.5)';cx.lineWidth=1;
+      cx.beginPath();cx.moveTo(l.x,l.top+12);cx.lineTo(l.x,l.bot);cx.stroke();
+    }
+    if(l.firing){
+      cx.save();cx.globalCompositeOperation='lighter';
+      cx.fillStyle='rgba(255,77,109,.45)';cx.fillRect(l.x-7,l.top+12,14,l.bot-l.top-12);
+      cx.fillStyle='#fff';cx.fillRect(l.x-2,l.top+12,4,l.bot-l.top-12);
+      cx.restore();
+    }
+  }
+  // second-bar upgrade: spinning gold star
+  for(const u of upgrades){
+    const bob=Math.sin(u.t*3)*4, rot=u.t*2;
+    cx.save();cx.translate(u.x+12,u.y+12+bob);cx.rotate(rot);
+    cx.fillStyle='#ffd166';
+    cx.beginPath();for(let i=0;i<10;i++){const r=i%2?6:14,a=i*Math.PI/5;
+      cx[i?'lineTo':'moveTo'](Math.cos(a)*r,Math.sin(a)*r);}cx.closePath();cx.fill();
+    cx.restore();
+    cx.fillStyle='#ffd166';cx.font='9px monospace';cx.fillText('BAR B',u.x-2,u.y-10+bob);
   }
   // flag
   cx.fillStyle='#e8ecff';cx.fillRect(flag.x,flag.y-24,3,56);
@@ -642,7 +762,8 @@ function draw(){
   cx.globalAlpha=1;cx.textAlign='left';
   cx.restore();
 
-  // beat indicator bar at bottom of canvas
+  // beat indicator bar at bottom of canvas (screen space, unzoomed)
+  cx.setTransform(1,0,0,1,0,0);
   const bw=W*0.4, bx=(W-bw)/2, by=H-26;
   cx.fillStyle='rgba(20,26,46,.8)';cx.fillRect(bx,by,bw,10);
   const pp=beatPhase().p;
@@ -659,23 +780,35 @@ function draw(){
 const rackEl=document.getElementById('rack');
 function renderRack(){
   rackEl.innerHTML='';
-  for(let i=0;i<SLOTS;i++){
-    const d=document.createElement('div');d.className='slot';
-    if(i===playhead)d.classList.add('playhead');
-    if(i===selectedSlot)d.classList.add('selected');
-    const key=slots[i];
-    d.innerHTML=`<small>${i+1}</small>`;
-    if(key){
-      d.style.color=PIECES[key].col; d.style.borderColor=PIECES[key].col;
-      d.innerHTML+=PIECES[key].label;
-      if(cooldowns[key]>0){const c=document.createElement('div');c.className='cd';
-        c.style.height=(cooldowns[key]/PIECES[key].cd*100)+'%';d.appendChild(c);}
+  const bars=[{arr:slots,name:'A'}].concat(barUnlocked?[{arr:slotsB,name:'B'}]:[]);
+  bars.forEach((bar,ri)=>{
+    const row=document.createElement('div');row.className='rackrow';
+    const tag=document.createElement('div');tag.className='bartag';
+    tag.textContent=bar.name+(barUnlocked?(activeRack===ri?' ◄':''):'');
+    row.appendChild(tag);
+    for(let i=0;i<SLOTS;i++){
+      const g=ri*SLOTS+i;
+      const d=document.createElement('div');d.className='slot';
+      if(i===playhead)d.classList.add('playhead');
+      if(g===selectedSlot)d.classList.add('selected');
+      const key=bar.arr[i];
+      d.innerHTML=`<small>${i+1}</small>`;
+      if(key){
+        d.style.color=PIECES[key].col; d.style.borderColor=PIECES[key].col;
+        d.innerHTML+=PIECES[key].label;
+        if(cooldowns[key]>0){const c=document.createElement('div');c.className='cd';
+          c.style.height=(cooldowns[key]/PIECES[key].cd*100)+'%';d.appendChild(c);}
+      }
+      row.appendChild(d);
     }
-    rackEl.appendChild(d);
-  }
+    rackEl.appendChild(row);
+  });
   document.getElementById('hp').textContent='HP '+'♥'.repeat(Math.max(0,player.hp))+'·'.repeat(Math.max(0,player.maxhp-player.hp));
-  const pieces=slots.filter(Boolean).length;
-  document.getElementById('stats').textContent=`SONG ${pieces}/8 ${player.powerShots?'| POWER×'+player.powerShots:''} ${player.canDash?'':'| dash spent'}`;
+  const pieces=slots.filter(Boolean).length+(barUnlocked?slotsB.filter(Boolean).length:0);
+  const total=barUnlocked?16:8;
+  document.getElementById('stats').textContent=
+    `SONG ${pieces}/${total}`+(combo>1?` | COMBO ×${combo}`:'')+(bestCombo>3?` | BEST ×${bestCombo}`:'')
+    +(player.powerShots?' | POWER×'+player.powerShots:'')+(player.canDash?'':' | dash spent');
 }
 function ringFlash(){
   const r=document.getElementById('beatring');
@@ -696,7 +829,10 @@ function buildCheat(){
   el.innerHTML='<h3>INSTRUMENTS · E ON BEAT</h3>'+PIECE_KEYS.map(k=>
     `<div class="row"><div class="sw" style="background:${PIECES[k].col}"></div>
      <div><b style="color:${PIECES[k].col}">${PIECES[k].label}</b> — ${PIECES[k].desc}
-     <span class="sub">${rhythm(k)} · cooldown ${PIECES[k].cd} beats</span></div></div>`).join('');
+     <span class="sub">${rhythm(k)} · cooldown ${PIECES[k].cd} beats</span></div></div>`).join('')
+    +'<h3 style="margin-top:8px">HAZARDS</h3>'
+    +'<div class="row"><div class="sw" style="background:#ff4d6d"></div><div>SPIKES — out beats 1–2 of 4<span class="sub">red glow = incoming</span></div></div>'
+    +'<div class="row"><div class="sw" style="background:#ffd166"></div><div>LASER — fires beats 1–2 of 8<span class="sub">gold flicker = charging</span></div></div>';
 }
 document.getElementById('start').addEventListener('click',()=>{
   initAudio();started=true;
